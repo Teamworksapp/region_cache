@@ -39,8 +39,8 @@ def test_init_app(app):
 
 def test_subregions(region_cache):
     r = region_cache.region('abc.xyz')
-    assert f'{region_cache._root_name}.abc' in region_cache._regions
-    assert f'{region_cache._root_name}.abc.xyz' in region_cache._regions
+    assert '{region_cache._root_name}.abc'.format(region_cache=region_cache) in region_cache._regions
+    assert '{region_cache._root_name}.abc.xyz'.format(region_cache=region_cache)  in region_cache._regions
     assert 'abc.xyz' not in region_cache._regions
     assert 'xyz' not in region_cache._regions
 
