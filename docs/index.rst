@@ -1,5 +1,5 @@
 Welcome to region_cache's documentation!
-======================================
+========================================
 
 .. toctree::
    :maxdepth: 2

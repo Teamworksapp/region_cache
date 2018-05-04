@@ -11,7 +11,10 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
-requirements = [ ]
+requirements = [
+    'blinker',
+    'redis'
+]
 
 setup_requirements = ['pytest-runner', ]
 
@@ -21,7 +24,7 @@ setup(
     author="Jefferson Heard",
     author_email='jheard@teamworks.com',
     classifiers=[
-        'Development Status :: 2 - Pre-Alpha',
+        'Development Status :: 4 - Beta',
         'Intended Audience :: Developers',
         'License :: OSI Approved :: MIT License',
         'Natural Language :: English',

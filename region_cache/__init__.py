@@ -54,4 +54,5 @@ See the region() function for more detail on how to configure it.
 
 """
 
-from .region_cache import RegionCache
+from .region_cache import RegionCache, Region
+__version__ = '0.1.0'
