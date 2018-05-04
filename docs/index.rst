@@ -8,7 +8,6 @@ Welcome to region_cache's documentation!
    readme
    installation
    usage
-   modules
    contributing
    authors
    history
