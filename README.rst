@@ -53,7 +53,7 @@ Using the region as a context manager treats everything in the context manager a
 
     with region('abc.xyz') as r:
         x in r  # test for presence
-        r[x] = 100  # get or None
+        r[x] = 100  # get or KeyError
         x = r[x]  # set
         del r[x]  # remove
 
