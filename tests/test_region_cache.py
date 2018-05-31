@@ -79,10 +79,6 @@ def test_items(region):
     region['foo'] = 'bar'
     assert region['foo'] == 'bar'
     assert region._conn.hget(region.name, 'foo') is not None
-    del region._local_storage['foo']
-    assert region['foo'] == 'bar'
-    assert 'foo' in region._local_storage
-
     del region['foo']
     assert pytest.raises(KeyError, lambda: region['foo'])
 
