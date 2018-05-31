@@ -64,7 +64,6 @@ class Region(MutableMapping):
 
         :return: None
         """
-        print(f'invalidate {self.name}')
         if pipeline is None:
             pipeline = self._conn.pipeline()
             is_root_call = True
@@ -115,35 +114,38 @@ class Region(MutableMapping):
 
         return wrapper
 
-
     def __getitem__(self, item):
-        if item not in self._local_storage:
-            raw_item = self._conn.hget(self.name, item)
-            if raw_item is not None:
-                self._local_storage[item] = self._serializer.loads(raw_item)
-            else:
-                raise KeyError(item)
+        raw_item = self._conn.hget(self.name, item)
 
-        return self._local_storage[item]
+        if raw_item is not None:
+            if raw_item not in self._local_storage:
+                self._local_storage[item] = self._serializer.loads(raw_item)
+        else:
+            raise KeyError(raw_item)
+
+        return self._local_storage[raw_item]
 
     def __setitem__(self, key, value):
+        raw_value = self._serializer.dumps(value)
+
         if self._update_resets_timeout and self._timeout:
             if self._pipe:
-                self._pipe.hset(self.name, key, self._serializer.dumps(value))
+                self._pipe.hset(self.name, key, raw_value)
                 self._pipe.expire(self.name, self._timeout)
             else:
                 with self._conn.pipeline() as pipe:
-                    pipe.hset(self.name, key, self._serializer.dumps(value))
+                    pipe.hset(self.name, key, raw_value)
                     pipe.expire(self.name, self._timeout)
         else:
             if self._pipe:
-                self._pipe.hset(self.name, key, self._serializer.dumps(value))
+                self._pipe.hset(self.name, key, raw_value)
             else:
                 self._conn.hset(self.name, key, self._serializer.dumps(value))
 
-        self._local_storage[key] = value
+        self._local_storage[raw_value] = value
 
     def __delitem__(self, key):
+        raw_item = self._conn.hget(self.name, key)
         if self._update_resets_timeout and self._timeout:
             if self._pipe:
                 self._pipe.hdel(self.name, key)
@@ -158,7 +160,7 @@ class Region(MutableMapping):
             else:
                 self._conn.hdel(self.name, key)
 
-        del self._local_storage[key]
+        del self._local_storage[raw_item]
 
     def __iter__(self):
         for k, v in self._conn.hgetall(self.name):
@@ -191,7 +193,6 @@ class Region(MutableMapping):
         return (self._region_cache.region(name.decode('utf-8')) for name in self._conn.smembers(self._children_key))
 
     def add_child(self, child):
-        print(f'child_added to {self.name} : {child.name}')
         self._conn.sadd(self._children_key, child.name)
 
     def reset_timeout(self):

@@ -44,7 +44,6 @@ class RegionCache(object):
         :param serializer:
         :return:
         """
-        print(f'get region {name}')
         if name is None:
             name = self._root_name
 
@@ -61,7 +60,6 @@ class RegionCache(object):
         while names:
             parts.append(names.pop())
             fqname = '.'.join(parts)
-            print(fqname, parent.name if parent else None)
             if fqname not in self._regions:
                 self._regions[fqname] = Region(
                     self, fqname,
@@ -70,7 +68,6 @@ class RegionCache(object):
                     serializer=serializer or self._serializer
                 )
             parent = self._regions[fqname]
-            print(parent)
 
         return self._regions[fqname]
 
