@@ -164,7 +164,7 @@ class Region(MutableMapping):
 
     def __iter__(self):
         for k in self._conn.hgetall(self.name):
-            if not k.startswith('__'):
+            if not k.decode('utf-8').startswith('__'):
                 yield k
 
     def __len__(self):
