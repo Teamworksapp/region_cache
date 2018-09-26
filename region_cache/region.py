@@ -163,9 +163,9 @@ class Region(MutableMapping):
         del self._local_storage[raw_item]
 
     def __iter__(self):
-        for k, v in self._conn.hgetall(self.name):
+        for k in self._conn.hgetall(self.name):
             if not k.startswith('__'):
-                yield k, self._serializer.loads(v)
+                yield k
 
     def __len__(self):
         return self._conn.hlen(self.name)
