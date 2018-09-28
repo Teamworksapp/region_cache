@@ -131,11 +131,9 @@ class Region(MutableMapping):
         if self._update_resets_timeout and self._timeout:
             if self._pipe:
                 self._pipe.hset(self.name, key, raw_value)
-                self._pipe.expire(self.name, self._timeout)
             else:
-                with self._conn.pipeline() as pipe:
-                    pipe.hset(self.name, key, raw_value)
-                    pipe.expire(self.name, self._timeout)
+                self._conn.hset(self.name, key, raw_value)
+                self._conn.expire(self.name, self._timeout)
         else:
             if self._pipe:
                 self._pipe.hset(self.name, key, raw_value)
@@ -149,11 +147,9 @@ class Region(MutableMapping):
         if self._update_resets_timeout and self._timeout:
             if self._pipe:
                 self._pipe.hdel(self.name, key)
-                self._pipe.expire(self.name, self._timeout)
             else:
-                with self._conn.pipeline() as pipe:
-                    pipe.hdel(self.name, key)
-                    pipe.expire(self.name, self._timeout)
+                self._conn.hdel(self.name, key)
+                self._conn.expire(self.name, self._timeout)
         else:
             if self._pipe:
                 self._pipe.hdel(self.name, key)
@@ -178,6 +174,8 @@ class Region(MutableMapping):
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
             self._pipe.execute()
+            if self._update_resets_timeout is not None and self._timeout:
+                self._conn.expire(self.name, self._timeout)
             retval = True
         else:
             self._pipe.reset()
