@@ -8,9 +8,37 @@ import pytest
 from collections import namedtuple
 from region_cache import Region, RegionCache
 
-@pytest.fixture()
-def app():
-    return namedtuple('app',['config'])(config={'CACHE_REDIS_URL': 'redis://localhost:6379/5'})
+
+@pytest.fixture(params={ "cfg": [
+    {'REGION_CACHE_URL': 'redis://localhost:6379/5'},
+    {
+        'REGION_CACHE_URL': 'redis://localhost:6379/5',
+        'REGION_CACHE_RR_URL': 'redis://localhost:6379/5'
+    },
+    {
+        'REGION_CACHE_HOST': 'localhost',
+        'REGION_CACHE_DB': 5,
+        'REGION_CACHE_RR_HOST': 'localhost'
+    },
+    {
+        'REGION_CACHE_HOST': 'localhost',
+        'REGION_CACHE_DB': 5,
+        'REGION_CACHE_OP_TIMEOUT': 0.5
+    },
+    {
+        'REGION_CACHE_HOST': 'localhost',
+        'REGION_CACHE_DB': 5,
+        'REGION_CACHE_OP_TIMEOUT': 0.5,
+        'REGION_CACHE_OP_TIMEOUT_RAISE': False,
+        'REGION_CACHE_OP_TIMEOUT_RECONNECT': True,
+        'REGION_CACHE_REDIS_OPTIONS': {
+            'max_connections': 3
+        }
+
+    }
+]})
+def app(cfg):
+    return namedtuple('app', ['config'])(config=cfg)
 
 @pytest.fixture()
 def region_cache(app):

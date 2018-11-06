@@ -1,9 +1,12 @@
 import pickle
+import redis
 from collections import MutableMapping
 from datetime import datetime
 from functools import wraps
+from boltons import cacheutils
 
 import blinker
+import logging
 
 
 class Region(MutableMapping):
@@ -13,20 +16,20 @@ class Region(MutableMapping):
     This will make for proper nesting of cache structures.
     """
     def __init__(self, region_cache, name, timeout=None, update_resets_timeout=True, serializer=pickle):
-        self._conn = region_cache._conn
+        self._region_cache = region_cache
         self.name = name
-        self._conn.hset(name, '__cache_region_created_at__', datetime.utcnow().isoformat())
+        self._region_cache.conn.hset(name, '__cache_region_created_at__', datetime.utcnow().isoformat())
         self._timeout = None
         self._region_cache = region_cache
         self._serializer = serializer
         self._pipe = None
         self._children_key = self.name + "::child_caches"
-        self._local_storage = {}
+        self._local_storage = cacheutils.LRU()
         self._update_resets_timeout = update_resets_timeout
 
         if timeout:
             self._timeout = timeout
-            self._conn.expire(name, timeout)
+            self._region_cache.conn.expire(name, timeout)
 
         if '.' in name:
             parent = name.rsplit('.', 1)[0]
@@ -64,13 +67,14 @@ class Region(MutableMapping):
 
         :return: None
         """
+
         if pipeline is None:
-            pipeline = self._conn.pipeline()
+            pipeline = self._region_cache.conn.pipeline()
             is_root_call = True
         else:
             is_root_call = False
 
-        self._local_storage = {}
+        self._local_storage = cacheutils.LRU()
 
         for child in self.children():
             child.invalidate(pipeline)
@@ -89,7 +93,11 @@ class Region(MutableMapping):
         """
 
         def handler(sender, **kwargs):
-            self.invalidate()
+            try:
+                self.invalidate()
+            except redis.TimeoutError:
+                logging.getLogger('region_cache').exception(
+                    f"Invalidation of {self.name} in signal handler timed out. Flush it manually")
 
         for sig in signals:
             if isinstance(sig, str):
@@ -115,13 +123,29 @@ class Region(MutableMapping):
         return wrapper
 
     def __getitem__(self, item):
-        raw_item = self._conn.hget(self.name, item)
+        timed_out = False
 
+        # pylint: disable=W0212
+        if self._region_cache._raise_on_timeout:
+            raw_item = self._region_cache.read_conn.hget(self.name, item)
+        else:
+            try:
+                raw_item = self._region_cache.read_conn.hget(self.name, item)
+            except redis.TimeoutError:
+                raw_item = None
+                timed_out = True
+
+        if timed_out:
+            # pylint: disable=W0212
+            if self._region_cache._reconnect_on_timeout:
+                self._region_cache.invalidate_connections()
+
+            return self._local_storage.get(item, None)
         if raw_item is not None:
             if raw_item not in self._local_storage:
                 self._local_storage[item] = self._serializer.loads(raw_item)
         else:
-            raise KeyError(raw_item)
+            raise KeyError(item)
 
         return self._local_storage[raw_item]
 
@@ -132,50 +156,50 @@ class Region(MutableMapping):
             if self._pipe:
                 self._pipe.hset(self.name, key, raw_value)
             else:
-                self._conn.hset(self.name, key, raw_value)
-                self._conn.expire(self.name, self._timeout)
+                self._region_cache.conn.hset(self.name, key, raw_value)
+                self._region_cache.conn.expire(self.name, self._timeout)
         else:
             if self._pipe:
                 self._pipe.hset(self.name, key, raw_value)
             else:
-                self._conn.hset(self.name, key, self._serializer.dumps(value))
+                self._region_cache.conn.hset(self.name, key, self._serializer.dumps(value))
 
         self._local_storage[raw_value] = value
 
     def __delitem__(self, key):
-        raw_item = self._conn.hget(self.name, key)
+        raw_item = self._region_cache.conn.hget(self.name, key)
         if self._update_resets_timeout and self._timeout:
             if self._pipe:
                 self._pipe.hdel(self.name, key)
             else:
-                self._conn.hdel(self.name, key)
-                self._conn.expire(self.name, self._timeout)
+                self._region_cache.conn.hdel(self.name, key)
+                self._region_cache.conn.expire(self.name, self._timeout)
         else:
             if self._pipe:
                 self._pipe.hdel(self.name, key)
             else:
-                self._conn.hdel(self.name, key)
+                self._region_cache.conn.hdel(self.name, key)
 
         del self._local_storage[raw_item]
 
     def __iter__(self):
-        for k in self._conn.hgetall(self.name):
+        for k in self._region_cache.read_conn.hgetall(self.name):
             if not k.decode('utf-8').startswith('__'):
                 yield k
 
     def __len__(self):
-        return self._conn.hlen(self.name)
+        return self._region_cache.conn.hlen(self.name)
 
     def __enter__(self):
         if not self._pipe:
-            self._pipe = self._conn.pipeline()
+            self._pipe = self._region_cache.conn.pipeline()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
             self._pipe.execute()
             if self._update_resets_timeout is not None and self._timeout:
-                self._conn.expire(self.name, self._timeout)
+                self._region_cache.conn.expire(self.name, self._timeout)
             retval = True
         else:
             self._pipe.reset()
@@ -188,10 +212,10 @@ class Region(MutableMapping):
         return other.name == self.name
 
     def children(self):
-        return (self._region_cache.region(name.decode('utf-8')) for name in self._conn.smembers(self._children_key))
+        return (self._region_cache.region(name.decode('utf-8')) for name in self._region_cache.read_conn.smembers(self._children_key))
 
     def add_child(self, child):
-        self._conn.sadd(self._children_key, child.name)
+        self._region_cache.conn.sadd(self._children_key, child.name)
 
     def reset_timeout(self):
-        self._conn.expire(self.name, self._timeout)
+        self._region_cache.conn.expire(self.name, self._timeout)
