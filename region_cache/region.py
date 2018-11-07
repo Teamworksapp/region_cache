@@ -97,7 +97,7 @@ class Region(MutableMapping):
                 self.invalidate()
             except redis.TimeoutError:
                 logging.getLogger('region_cache').exception(
-                    f"Invalidation of {self.name} in signal handler timed out. Flush it manually")
+                    "Invalidation of {self.name} in signal handler timed out. Flush it manually".format(self=self))
 
         for sig in signals:
             if isinstance(sig, str):
