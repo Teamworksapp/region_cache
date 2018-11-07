@@ -9,7 +9,7 @@ from collections import namedtuple
 from region_cache import Region, RegionCache
 
 
-@pytest.fixture(params={ "cfg": [
+@pytest.fixture(params=[
     {'REGION_CACHE_URL': 'redis://localhost:6379/5'},
     {
         'REGION_CACHE_URL': 'redis://localhost:6379/5',
@@ -17,16 +17,20 @@ from region_cache import Region, RegionCache
     },
     {
         'REGION_CACHE_HOST': 'localhost',
+        'REGION_CACHE_PORT': 6379,
         'REGION_CACHE_DB': 5,
-        'REGION_CACHE_RR_HOST': 'localhost'
+        'REGION_CACHE_RR_HOST': 'localhost',
+        'REGION_CACHE_RR_PORT': 6379
     },
     {
         'REGION_CACHE_HOST': 'localhost',
+        'REGION_CACHE_PORT': 6379,
         'REGION_CACHE_DB': 5,
         'REGION_CACHE_OP_TIMEOUT': 0.5
     },
     {
         'REGION_CACHE_HOST': 'localhost',
+        'REGION_CACHE_PORT': 6379,
         'REGION_CACHE_DB': 5,
         'REGION_CACHE_OP_TIMEOUT': 0.5,
         'REGION_CACHE_OP_TIMEOUT_RAISE': False,
@@ -36,17 +40,18 @@ from region_cache import Region, RegionCache
         }
 
     }
-]})
-def app(cfg):
-    return namedtuple('app', ['config'])(config=cfg)
+])
+def app(request):
+    return namedtuple('app', ['config'])(config=request.param)
+
 
 @pytest.fixture()
 def region_cache(app):
     c = RegionCache()
     c.init_app(app)
-    c._conn.flushall()
+    c.conn.flushall()
     yield c
-    c._conn.flushall()
+    c.conn.flushall()
 
 
 @pytest.fixture()
@@ -66,12 +71,14 @@ def region_with_timeout(region_cache):
 def test_init_app(app):
     c = RegionCache()
     c.init_app(app)
-    assert c._conn
-    assert c._conn.ping()
+    assert c.conn
+    assert c.conn.ping()
     assert c._root
     assert c._root_name in c._regions
     assert c._regions[c._root_name] is c._root
     assert len(c._regions) == 1
+
+
 
 def test_subregions(region_cache):
     r = region_cache.region('abc.xyz')
@@ -93,28 +100,28 @@ def test_region_context_manager(region):
 
     assert 'key1' in region
     assert 'key2' in region
-    assert region._conn.hget(region.name, 'key1') is not None
-    assert region._conn.hget(region.name, 'key2') is not None
+    assert region._region_cache.conn.hget(region.name, 'key1') is not None
+    assert region._region_cache.conn.hget(region.name, 'key2') is not None
 
 
 def test_invalidate(region):
     region['key'] = 'value'
     region.invalidate()
     assert 'key' not in region
-    assert region._conn.hget(region.name, 'key') is None
+    assert region._region_cache.conn.hget(region.name, 'key') is None
 
     sb = region.region('sub')
     sb['key2'] = 'value'
     region.invalidate()
 
-    assert region._conn.hget(sb.name, 'key2') is None
+    assert region._region_cache.conn.hget(sb.name, 'key2') is None
     assert 'key2' not in sb
 
 
 def test_items(region):
     region['foo'] = 'bar'
     assert region['foo'] == 'bar'
-    assert region._conn.hget(region.name, 'foo') is not None
+    assert region._region_cache.conn.hget(region.name, 'foo') is not None
     del region['foo']
     assert pytest.raises(KeyError, lambda: region['foo'])
 
@@ -134,26 +141,26 @@ def test_invalidate_on(region):
 
     s.send('nothing',in_='particular')
     assert 'key' not in region
-    assert region._conn.hget(region.name, 'key') is None
+    assert region._region_cache.conn.hget(region.name, 'key') is None
 
     region['key'] = 'value'
 
     t.send('nothing', in_='particular')
     assert 'key' not in region
-    assert region._conn.hget(region.name, 'key') is None
+    assert region._region_cache.conn.hget(region.name, 'key') is None
 
-called = 0
 def test_cached(region):
+    called = [0]
+
     @region.cached
     def foobar(k, x=None):
-        global called
-        called += 1
+        called[0] += 1
         return k
 
     foobar(1)
-    assert called == 1
+    assert called[0] == 1
     foobar(1)
-    assert called == 1
+    assert called[0] == 1
 
 
 def test_timeout_with_context(region_with_timeout):
@@ -161,10 +168,10 @@ def test_timeout_with_context(region_with_timeout):
         r['key1'] = 0
         r['key2'] = 1
 
-    assert region_with_timeout._conn.hget(region_with_timeout.name, 'key1') is not None
-    assert region_with_timeout._conn.hget(region_with_timeout.name, 'key2') is not None
+    assert region_with_timeout._region_cache.conn.hget(region_with_timeout.name, 'key1') is not None
+    assert region_with_timeout._region_cache.conn.hget(region_with_timeout.name, 'key2') is not None
 
-    assert region_with_timeout._conn.ttl(region_with_timeout.name) > 0
+    assert region_with_timeout._region_cache.conn.ttl(region_with_timeout.name) > 0
 
     assert 'key1' in region_with_timeout
     assert 'key2' in region_with_timeout
@@ -172,17 +179,17 @@ def test_timeout_with_context(region_with_timeout):
     import time
     time.sleep(1)
 
-    assert region_with_timeout._conn.ttl(region_with_timeout.name) > 0
+    assert region_with_timeout._region_cache.conn.ttl(region_with_timeout.name) > 0
 
-    assert region_with_timeout._conn.hget(region_with_timeout.name, 'key1') is not None
-    assert region_with_timeout._conn.hget(region_with_timeout.name, 'key2') is not None
+    assert region_with_timeout._region_cache.conn.hget(region_with_timeout.name, 'key1') is not None
+    assert region_with_timeout._region_cache.conn.hget(region_with_timeout.name, 'key2') is not None
 
     assert 'key1' in region_with_timeout
     assert 'key2' in region_with_timeout
 
     time.sleep(1.5)
 
-    assert region_with_timeout._conn.ttl(region_with_timeout.name) == -2
+    assert region_with_timeout._region_cache.conn.ttl(region_with_timeout.name) == -2
 
     assert 'key1' not in region_with_timeout
     assert 'key2' not in region_with_timeout
@@ -193,10 +200,10 @@ def test_timeout(region_with_timeout):
     region_with_timeout['key1'] = 0
     region_with_timeout['key2'] = 1
 
-    assert region_with_timeout._conn.hget(region_with_timeout.name, 'key1') is not None
-    assert region_with_timeout._conn.hget(region_with_timeout.name, 'key2') is not None
+    assert region_with_timeout._region_cache.conn.hget(region_with_timeout.name, 'key1') is not None
+    assert region_with_timeout._region_cache.conn.hget(region_with_timeout.name, 'key2') is not None
 
-    assert region_with_timeout._conn.ttl(region_with_timeout.name) > 0
+    assert region_with_timeout._region_cache.conn.ttl(region_with_timeout.name) > 0
 
     assert 'key1' in region_with_timeout
     assert 'key2' in region_with_timeout
@@ -204,17 +211,17 @@ def test_timeout(region_with_timeout):
     import time
     time.sleep(1)
 
-    assert region_with_timeout._conn.ttl(region_with_timeout.name) > 0
+    assert region_with_timeout._region_cache.conn.ttl(region_with_timeout.name) > 0
 
-    assert region_with_timeout._conn.hget(region_with_timeout.name, 'key1') is not None
-    assert region_with_timeout._conn.hget(region_with_timeout.name, 'key2') is not None
+    assert region_with_timeout._region_cache.conn.hget(region_with_timeout.name, 'key1') is not None
+    assert region_with_timeout._region_cache.conn.hget(region_with_timeout.name, 'key2') is not None
 
     assert 'key1' in region_with_timeout
     assert 'key2' in region_with_timeout
 
     time.sleep(1.5)
 
-    assert region_with_timeout._conn.ttl(region_with_timeout.name) == -2
+    assert region_with_timeout._region_cache.conn.ttl(region_with_timeout.name) == -2
 
     assert 'key1' not in region_with_timeout
     assert 'key2' not in region_with_timeout
@@ -224,10 +231,10 @@ def test_timeout(region_with_timeout):
     region_with_timeout['key1'] = 0
     region_with_timeout['key2'] = 1
 
-    assert region_with_timeout._conn.hget(region_with_timeout.name, 'key1') is not None
-    assert region_with_timeout._conn.hget(region_with_timeout.name, 'key2') is not None
+    assert region_with_timeout._region_cache.conn.hget(region_with_timeout.name, 'key1') is not None
+    assert region_with_timeout._region_cache.conn.hget(region_with_timeout.name, 'key2') is not None
 
-    assert region_with_timeout._conn.ttl(region_with_timeout.name) > 0
+    assert region_with_timeout._region_cache.conn.ttl(region_with_timeout.name) > 0
 
     assert 'key1' in region_with_timeout
     assert 'key2' in region_with_timeout

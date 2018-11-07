@@ -92,8 +92,8 @@ class RegionCache(object):
         """
         if app.config.get('REGION_CACHE_OP_TIMEOUT', None):
             self._reconnect_on_timeout = app.config.get('REGION_CACHE_OP_TIMEOUT_RECONNECT', self._reconnect_on_timeout)
-            self._op_timeout = app.config.get('REGION_CACHE_OP_TIMEOUT')
-            self._raise_on_timeout = app.config.get('REGION_CACHE_OP_TIMEOUT_RAISE')
+            self._op_timeout = app.config.get('REGION_CACHE_OP_TIMEOUT', self._op_timeout)
+            self._raise_on_timeout = app.config.get('REGION_CACHE_OP_TIMEOUT_RAISE', self._raise_on_timeout)
 
         if 'REGION_CACHE_URL' in app.config:
             redis_url_parsed = urlparse(app.config['REGION_CACHE_URL'])
@@ -111,14 +111,13 @@ class RegionCache(object):
         if 'REGION_CACHE_RR_URL' in app.config:
             redis_url_parsed = urlparse(app.config['REGION_CACHE_RR_URL'])
 
-            self._host = redis_url_parsed.hostname
-            self._port = redis_url_parsed.port or 6379
-            self._db = int(redis_url_parsed.path[1:])
-            self._password = redis_url_parsed.password
+            self._rr_host = redis_url_parsed.hostname
+            self._rr_port = redis_url_parsed.port or 6379
+            self._rr_password = redis_url_parsed.password
         else:
-            self._host = app.config.get('REGION_CACHE_RR_HOST', None)
-            self._port = app.config.get('REGION_CACHE_RR_PORT', None)
-            self._password = app.config.get('REGION_CACHE_RR_PASSWORD', None)
+            self._rr_host = app.config.get('REGION_CACHE_RR_HOST', None)
+            self._rr_port = app.config.get('REGION_CACHE_RR_PORT', None)
+            self._rr_password = app.config.get('REGION_CACHE_RR_PASSWORD', None)
 
         self._args += tuple(app.config.get('REGION_CACHE_REDIS_ARGS', ()))
         self._kwargs.update(app.config.get('REGION_CACHE_REDIS_OPTIONS', {}))
@@ -145,7 +144,7 @@ class RegionCache(object):
                 db=self._db,
                 password=self._password,
                 *self._args,
-                **self._kwargs
+                **kwargs
             )
         return self._w_conn
 

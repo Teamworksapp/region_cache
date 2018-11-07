@@ -127,12 +127,12 @@ class Region(MutableMapping):
 
         # pylint: disable=W0212
         if self._region_cache._raise_on_timeout:
-            raw_item = self._region_cache.read_conn.hget(self.name, item)
+            raw_value = self._region_cache.read_conn.hget(self.name, item)
         else:
             try:
-                raw_item = self._region_cache.read_conn.hget(self.name, item)
+                raw_value = self._region_cache.read_conn.hget(self.name, item)
             except redis.TimeoutError:
-                raw_item = None
+                raw_value = None
                 timed_out = True
 
         if timed_out:
@@ -140,14 +140,18 @@ class Region(MutableMapping):
             if self._region_cache._reconnect_on_timeout:
                 self._region_cache.invalidate_connections()
 
-            return self._local_storage.get(item, None)
-        if raw_item is not None:
-            if raw_item not in self._local_storage:
-                self._local_storage[item] = self._serializer.loads(raw_item)
+            # if we time out, and we have some value stored for this key, return that value
+            for stored_item, raw_value in self._local_storage.keys():
+                if stored_item == item:
+                    return self._local_storage[item, raw_value]
+
+        if raw_value is not None:
+            if (item, raw_value) not in self._local_storage:
+                self._local_storage[item, raw_value] = self._serializer.loads(raw_value)
         else:
             raise KeyError(item)
 
-        return self._local_storage[raw_item]
+        return self._local_storage[item, raw_value]
 
     def __setitem__(self, key, value):
         raw_value = self._serializer.dumps(value)
@@ -167,7 +171,7 @@ class Region(MutableMapping):
         self._local_storage[raw_value] = value
 
     def __delitem__(self, key):
-        raw_item = self._region_cache.conn.hget(self.name, key)
+        raw_value = self._region_cache.conn.hget(self.name, key)
         if self._update_resets_timeout and self._timeout:
             if self._pipe:
                 self._pipe.hdel(self.name, key)
@@ -180,7 +184,7 @@ class Region(MutableMapping):
             else:
                 self._region_cache.conn.hdel(self.name, key)
 
-        del self._local_storage[raw_item]
+        del self._local_storage[raw_value]
 
     def __iter__(self):
         for k in self._region_cache.read_conn.hgetall(self.name):
