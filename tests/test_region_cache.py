@@ -163,6 +163,19 @@ def test_cached(region):
     assert called[0] == 1
 
 
+def test_get_or_compute(region):
+    x = region.get_or_compute('computed_key', 0)
+    assert 'computed_key' in region
+    assert region['computed_key'] == 0
+    assert x == 0
+
+    y = region.get_or_compute('computed_key2', lambda: 200)
+    assert y == 200
+    assert 'computed_key2' in region
+    assert region['computed_key2'] == 200
+
+
+
 def test_timeout_with_context(region_with_timeout):
     with region_with_timeout as r:
         r['key1'] = 0
