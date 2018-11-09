@@ -125,6 +125,11 @@ class RegionCache(object):
         self._root = self.region()
 
     def invalidate_connections(self):
+        if self._r_conn and self._r_conn is not self._w_conn:
+            self._r_conn.close()
+        if self._w_conn:
+            self._w_conn.close()
+
         self._r_conn = None
         self._w_conn = None
 

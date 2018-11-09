@@ -122,6 +122,23 @@ class Region(MutableMapping):
 
         return wrapper
 
+    def get_or_compute(self, item, alt):
+        try:
+            value = self.get(item)
+            if value is not None:
+                return value
+            else:
+                value = alt() if callable(alt) else alt
+                self[item] = value
+                return value
+        except redis.TimeoutError:
+            logging.getLogger('region_cache').getChild(self.name).warning(
+                "Cannot reach cache. Using alternative")
+            if callable(alt):
+                return alt()
+            else:
+                return alt
+
     def __getitem__(self, item):
         timed_out = False
 
