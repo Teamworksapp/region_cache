@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-
+import datetime
 from urllib.parse import urlparse
 
 import redis
@@ -22,6 +22,7 @@ class RegionCache(object):
         password=None,
         op_timeout=None,
         reconnect_on_timeout=False,
+        timeout_backoff=None,
         raise_on_timeout=False,
         rr_host=None,
         rr_port=0,
@@ -49,6 +50,7 @@ class RegionCache(object):
             fail. Flask/Celery config is REGION_CACHE_OP_TIMEOUT.
         :param reconnect_on_timeout (optional bool): Default = False. Whether to close the connection and reconnect on
             timeout. Flask/Celery config is REGION_CACHE_OP_TIMEOUT_RECONNECT.
+        :param reconnect_backoff (optional int): Seconds that we should wait before trying to reconnect to the cache.
         :param raise_on_timeout (optional bool): Default = False. If false, we catch the exception and return None for
             readonly operations.Otherwise raise redis.TimeoutError. Flask/Celery config is
             REGION_CACHE_OP_TIMEOUT_RAISE.
@@ -68,6 +70,10 @@ class RegionCache(object):
         self._op_timeout = op_timeout
         self._reconnect_on_timeout = reconnect_on_timeout
         self._raise_on_timeout = raise_on_timeout
+
+        self._reconnect_backoff = timeout_backoff
+        self._last_timeout = None
+        self._reconnect_after = None
 
         self._host = host
         self._port = port
@@ -92,6 +98,7 @@ class RegionCache(object):
         """
         if app.config.get('REGION_CACHE_OP_TIMEOUT', None):
             self._reconnect_on_timeout = app.config.get('REGION_CACHE_OP_TIMEOUT_RECONNECT', self._reconnect_on_timeout)
+            self._reconnect_backoff = app.config.get('REGION_CACHE_RECONNECT_BACKOFF', self._reconnect_backoff)
             self._op_timeout = app.config.get('REGION_CACHE_OP_TIMEOUT', self._op_timeout)
             self._raise_on_timeout = app.config.get('REGION_CACHE_OP_TIMEOUT_RAISE', self._raise_on_timeout)
 
@@ -126,12 +133,22 @@ class RegionCache(object):
 
     def invalidate_connections(self):
         if self._r_conn and self._r_conn is not self._w_conn:
-            self._r_conn.close()
+            self._r_conn.connection_pool.disconnect()
         if self._w_conn:
-            self._w_conn.close()
+            self._w_conn.connection_pool.disconnect()
 
         self._r_conn = None
         self._w_conn = None
+        self._last_timeout = datetime.datetime.utcnow()
+        if self._reconnect_backoff:
+            self._reconnect_after = self._last_timeout + datetime.timedelta(self._reconnect_backoff)
+
+    def should_use_local_storage(self):
+        if not (self._w_conn and self._r_conn) and self._reconnect_after:
+            if datetime.datetime.utcnow() < self._reconnect_after:
+                return True
+
+        return False
 
     @property
     def conn(self):
@@ -139,6 +156,7 @@ class RegionCache(object):
         The master connection to redis.
         """
         if not self._w_conn:
+            self._reconnect_after = None
             kwargs = dict(**self._kwargs)
             if self._op_timeout:
                 kwargs['socket_timeout'] = self._op_timeout
@@ -159,6 +177,7 @@ class RegionCache(object):
         A connection suitable for doing readonly operations against redis. Uses a read-replica if configured.
         """
         if not self._r_conn:
+            self._reconnect_after = None
             if self._rr_host:
                 self._r_conn = redis.StrictRedis(
                    host=self._rr_host,

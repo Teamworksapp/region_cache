@@ -142,6 +142,14 @@ class Region(MutableMapping):
     def __getitem__(self, item):
         timed_out = False
 
+        if self._region_cache.should_use_local_storage():
+            # if we time out, and we have some value stored for this key, return that value
+            for stored_item, raw_value in self._local_storage.keys():
+                if stored_item == item:
+                    return self._local_storage[item, raw_value]
+            else:
+                raise KeyError(item)
+
         # pylint: disable=W0212
         if self._region_cache._raise_on_timeout:
             raw_value = self._region_cache.read_conn.hget(self.name, item)
@@ -173,38 +181,40 @@ class Region(MutableMapping):
     def __setitem__(self, key, value):
         raw_value = self._serializer.dumps(value)
 
-        if self._update_resets_timeout and self._timeout:
-            if self._pipe:
-                self._pipe.hset(self.name, key, raw_value)
+        if not self._region_cache.should_use_local_storage():
+            if self._update_resets_timeout and self._timeout:
+                if self._pipe:
+                    self._pipe.hset(self.name, key, raw_value)
+                else:
+                    self._region_cache.conn.hset(self.name, key, raw_value)
+                    self._region_cache.conn.expire(self.name, self._timeout)
             else:
-                self._region_cache.conn.hset(self.name, key, raw_value)
-                self._region_cache.conn.expire(self.name, self._timeout)
-        else:
-            if self._pipe:
-                self._pipe.hset(self.name, key, raw_value)
-            else:
-                self._region_cache.conn.hset(self.name, key, self._serializer.dumps(value))
+                if self._pipe:
+                    self._pipe.hset(self.name, key, raw_value)
+                else:
+                    self._region_cache.conn.hset(self.name, key, self._serializer.dumps(value))
 
-        self._local_storage[raw_value] = value
+        self._local_storage[key, raw_value] = value
 
     def __delitem__(self, key):
         raw_value = self._region_cache.conn.hget(self.name, key)
-        if self._update_resets_timeout and self._timeout:
-            if self._pipe:
-                self._pipe.hdel(self.name, key)
+        if not self._region_cache.should_use_local_storage():
+            if self._update_resets_timeout and self._timeout:
+                if self._pipe:
+                    self._pipe.hdel(self.name, key)
+                else:
+                    self._region_cache.conn.hdel(self.name, key)
+                    self._region_cache.conn.expire(self.name, self._timeout)
             else:
-                self._region_cache.conn.hdel(self.name, key)
-                self._region_cache.conn.expire(self.name, self._timeout)
-        else:
-            if self._pipe:
-                self._pipe.hdel(self.name, key)
-            else:
-                self._region_cache.conn.hdel(self.name, key)
+                if self._pipe:
+                    self._pipe.hdel(self.name, key)
+                else:
+                    self._region_cache.conn.hdel(self.name, key)
 
-        del self._local_storage[raw_value]
+        del self._local_storage[key, raw_value]
 
     def __iter__(self):
-        for k in self._region_cache.read_conn.hgetall(self.name):
+        for k in self._region_cache.read_conn.hgetkeys(self.name):
             if not k.decode('utf-8').startswith('__'):
                 yield k
 

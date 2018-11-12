@@ -79,6 +79,11 @@ def test_init_app(app):
     assert len(c._regions) == 1
 
 
+def no_presence(key, local_storage):
+    ret = True
+    for stored_key, _ in local_storage:
+        ret = ret and key != stored_key
+    return ret
 
 def test_subregions(region_cache):
     r = region_cache.region('abc.xyz')
@@ -109,6 +114,23 @@ def test_invalidate(region):
     region.invalidate()
     assert 'key' not in region
     assert region._region_cache.conn.hget(region.name, 'key') is None
+    assert no_presence('key', region._local_storage)
+
+    sb = region.region('sub')
+    sb['key2'] = 'value'
+    region.invalidate()
+    assert no_presence('key2', sb._local_storage)
+
+    assert region._region_cache.conn.hget(sb.name, 'key2') is None
+    assert 'key2' not in sb
+
+
+def test_invalidate_region(region_cache, region):
+    region['key'] = 'value'
+    region_cache.region('root').invalidate()
+    assert 'key' not in region
+    assert region._region_cache.conn.hget(region.name, 'key') is None
+    assert no_presence('key', region._local_storage)
 
     sb = region.region('sub')
     sb['key2'] = 'value'
@@ -116,11 +138,13 @@ def test_invalidate(region):
 
     assert region._region_cache.conn.hget(sb.name, 'key2') is None
     assert 'key2' not in sb
+    assert no_presence('key2', region._local_storage)
 
 
 def test_items(region):
     region['foo'] = 'bar'
     assert region['foo'] == 'bar'
+    assert not no_presence('foo', region._local_storage)
     assert region._region_cache.conn.hget(region.name, 'foo') is not None
     del region['foo']
     assert pytest.raises(KeyError, lambda: region['foo'])
@@ -174,6 +198,24 @@ def test_get_or_compute(region):
     assert 'computed_key2' in region
     assert region['computed_key2'] == 200
 
+
+def test_invalidate_connections(region_cache):
+    region_cache.invalidate_connections()
+    assert region_cache._w_conn is None
+    assert region_cache._r_conn is None
+
+
+def test_reconnect_backoff(region, region_cache):
+    region['key1'] = 0
+    region['key2'] = 1
+    region_cache._reconnect_backoff = 5  # 5 second backoff before trying to reconnect
+    region_cache.invalidate_connections()
+    assert region_cache.should_use_local_storage()
+    assert region['key1'] == 0
+    assert region['key2'] == 1
+    region['key3'] = 1
+    assert region_cache._w_conn is None
+    assert region_cache._r_conn is None
 
 
 def test_timeout_with_context(region_with_timeout):
