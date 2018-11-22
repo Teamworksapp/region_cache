@@ -102,6 +102,12 @@ class RegionCache(object):
             self._op_timeout = app.config.get('REGION_CACHE_OP_TIMEOUT', self._op_timeout)
             self._raise_on_timeout = app.config.get('REGION_CACHE_OP_TIMEOUT_RAISE', self._raise_on_timeout)
 
+            if self._reconnect_backoff:
+                self._reconnect_backoff = float(self._reconnect_backoff)
+            if self._op_timeout:
+                self._op_timeout = float(self._op_timeout)
+
+
         if 'REGION_CACHE_URL' in app.config:
             redis_url_parsed = urlparse(app.config['REGION_CACHE_URL'])
 
