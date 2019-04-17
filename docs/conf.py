@@ -48,7 +48,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = u'region_cache'
-copyright = u"2018, Jefferson Heard"
+copyright = u"2018, Teamworks Innovations, Inc."
 author = u"Jefferson Heard"
 
 # The version info for the project you're documenting, acts as replacement
