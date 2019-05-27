@@ -155,6 +155,11 @@ def test_children(region):
     assert sb in list(region.children())
 
 
+def test_iter(region, region_cache):
+    assert [x for x in region]
+    assert [x for x in region_cache]
+
+
 def test_invalidate_on(region):
     import blinker
     s = blinker.signal('named_signal')

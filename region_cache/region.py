@@ -214,7 +214,7 @@ class Region(MutableMapping):
         del self._local_storage[key, raw_value]
 
     def __iter__(self):
-        for k in self._region_cache.read_conn.hgetkeys(self.name):
+        for k in self._region_cache.read_conn.hkeys(self.name):
             if not k.decode('utf-8').startswith('__'):
                 yield k
 
