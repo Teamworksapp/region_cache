@@ -3,11 +3,13 @@ import redis
 from collections import MutableMapping
 from datetime import datetime
 from functools import wraps
-from boltons import cacheutils
 
 import blinker
 import logging
 
+from logging import getLogger
+
+_logger = getLogger('region_cache')
 
 class Region(MutableMapping):
     """
@@ -24,7 +26,6 @@ class Region(MutableMapping):
         self._serializer = serializer
         self._pipe = None
         self._children_key = self.name + "::child_caches"
-        self._local_storage = cacheutils.LRU()
         self._update_resets_timeout = update_resets_timeout
 
         if timeout:
@@ -67,14 +68,13 @@ class Region(MutableMapping):
 
         :return: None
         """
+        _logger.debug("Invalidating region %s", self.name)
 
         if pipeline is None:
             pipeline = self._region_cache.conn.pipeline()
             is_root_call = True
         else:
             is_root_call = False
-
-        self._local_storage = cacheutils.LRU()
 
         for child in self.children():
             child.invalidate(pipeline)
@@ -123,17 +123,21 @@ class Region(MutableMapping):
         return wrapper
 
     def get_or_compute(self, item, alt):
+        """
+        Get the value, or if the value is not in the cache, compute it from `alt`. Alt can be a callable or a scalar.
+
+        :param item: The key to get
+        :param alt: Callable or scalar. The value to return. Will be stored in the cache on computation.
+        :return: The value in the cache.
+        """
         try:
-            value = self.get(item)
-            if value is not None:
-                return value
-            else:
-                value = alt() if callable(alt) else alt
-                self[item] = value
-                return value
+            return self[item]
+        except KeyError:
+            value = alt() if callable(alt) else alt
+            self[item] = value
+            return value
         except redis.TimeoutError:
-            logging.getLogger('region_cache').getChild(self.name).warning(
-                "Cannot reach cache. Using alternative")
+            _logger.warning("Cannot reach cache. Using alternative")
             if callable(alt):
                 return alt()
             else:
@@ -142,16 +146,11 @@ class Region(MutableMapping):
     def __getitem__(self, item):
         timed_out = False
 
-        if self._region_cache.should_use_local_storage():
-            # if we time out, and we have some value stored for this key, return that value
-            for stored_item, raw_value in self._local_storage.keys():
-                if stored_item == item:
-                    return self._local_storage[item, raw_value]
-            else:
-                raise KeyError(item)
+        if self._region_cache.is_disconnected():
+            raise KeyError(item)
 
         # pylint: disable=W0212
-        if self._region_cache._raise_on_timeout:
+        if self._region_cache._raise_on_timeout:  # raise the redis timeout error instead of a key error
             raw_value = self._region_cache.read_conn.hget(self.name, item)
         else:
             try:
@@ -164,54 +163,46 @@ class Region(MutableMapping):
             # pylint: disable=W0212
             if self._region_cache._reconnect_on_timeout:
                 self._region_cache.invalidate_connections()
-
-            # if we time out, and we have some value stored for this key, return that value
-            for stored_item, raw_value in self._local_storage.keys():
-                if stored_item == item:
-                    return self._local_storage[item, raw_value]
-
-        if raw_value is not None:
-            if (item, raw_value) not in self._local_storage:
-                self._local_storage[item, raw_value] = self._serializer.loads(raw_value)
-        else:
             raise KeyError(item)
 
-        return self._local_storage[item, raw_value]
+        if raw_value is not None:
+            return self._serializer.loads(raw_value)
+        else:
+            raise KeyError(item)
 
     def __setitem__(self, key, value):
         raw_value = self._serializer.dumps(value)
 
-        if not self._region_cache.should_use_local_storage():
-            if self._update_resets_timeout and self._timeout:
-                if self._pipe:
-                    self._pipe.hset(self.name, key, raw_value)
-                else:
-                    self._region_cache.conn.hset(self.name, key, raw_value)
-                    self._region_cache.conn.expire(self.name, self._timeout)
-            else:
-                if self._pipe:
-                    self._pipe.hset(self.name, key, raw_value)
-                else:
-                    self._region_cache.conn.hset(self.name, key, self._serializer.dumps(value))
+        if not self._region_cache.is_disconnected():
+            should_reset_timeout = (not self._pipe and
+                                    self._timeout and
+                                    (self._update_resets_timeout or not len(self)))
 
-        self._local_storage[key, raw_value] = value
+
+            if self._pipe:
+                self._pipe.hset(self.name, key, raw_value)
+            else:
+                self._region_cache.conn.hset(self.name, key, raw_value)
+
+            if should_reset_timeout:
+                self._region_cache.conn.expire(self.name, self._timeout)
 
     def __delitem__(self, key):
-        raw_value = self._region_cache.conn.hget(self.name, key)
-        if not self._region_cache.should_use_local_storage():
-            if self._update_resets_timeout and self._timeout:
-                if self._pipe:
-                    self._pipe.hdel(self.name, key)
-                else:
-                    self._region_cache.conn.hdel(self.name, key)
-                    self._region_cache.conn.expire(self.name, self._timeout)
-            else:
-                if self._pipe:
-                    self._pipe.hdel(self.name, key)
-                else:
-                    self._region_cache.conn.hdel(self.name, key)
+        if not self._region_cache.is_disconnected():
+            should_reset_timeout = (not self._pipe and
+                                    self._timeout and
+                                    (self._update_resets_timeout or (len(self) == 1 and key in self)))
 
-        del self._local_storage[key, raw_value]
+            if self._pipe:
+                self._pipe.hdel(self.name, key)
+            else:
+                self._region_cache.conn.hdel(self.name, key)
+
+            if should_reset_timeout:
+                self._region_cache.conn.expire(self.name, self._timeout)
+
+        else:
+            raise redis.TimeoutError(f"Cannot delete item {key} from {self.name} because we are disconnected.")
 
     def __iter__(self):
         for k in self._region_cache.read_conn.hkeys(self.name):
@@ -228,8 +219,13 @@ class Region(MutableMapping):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
+
+            # if we started with nothing in the cache, reset it
+            should_reset_timeout = (self._timeout and (self._update_resets_timeout or len(self) == 0))
+
             self._pipe.execute()
-            if self._update_resets_timeout is not None and self._timeout:
+
+            if should_reset_timeout:
                 self._region_cache.conn.expire(self.name, self._timeout)
             retval = True
         else:
@@ -243,7 +239,8 @@ class Region(MutableMapping):
         return other.name == self.name
 
     def children(self):
-        return (self._region_cache.region(name.decode('utf-8')) for name in self._region_cache.read_conn.smembers(self._children_key))
+        return (self._region_cache.region(name.decode('utf-8'))
+                for name in self._region_cache.read_conn.smembers(self._children_key))
 
     def add_child(self, child):
         self._region_cache.conn.sadd(self._children_key, child.name)

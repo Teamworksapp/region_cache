@@ -6,6 +6,9 @@ import redis
 import pickle
 
 from .region import Region
+from logging import getLogger
+
+_logger = getLogger('region_cache')
 
 
 class RegionCache(object):
@@ -21,7 +24,7 @@ class RegionCache(object):
         db=0,
         password=None,
         op_timeout=None,
-        reconnect_on_timeout=False,
+        reconnect_on_timeout=True,
         timeout_backoff=None,
         raise_on_timeout=False,
         rr_host=None,
@@ -107,7 +110,6 @@ class RegionCache(object):
             if self._op_timeout:
                 self._op_timeout = float(self._op_timeout)
 
-
         if 'REGION_CACHE_URL' in app.config:
             redis_url_parsed = urlparse(app.config['REGION_CACHE_URL'])
 
@@ -138,6 +140,8 @@ class RegionCache(object):
         self._root = self.region()
 
     def invalidate_connections(self):
+        _logger.debug("Invalidating connections")
+
         if self._r_conn and self._r_conn is not self._w_conn:
             self._r_conn.connection_pool.disconnect()
         if self._w_conn:
@@ -149,7 +153,7 @@ class RegionCache(object):
         if self._reconnect_backoff:
             self._reconnect_after = self._last_timeout + datetime.timedelta(self._reconnect_backoff)
 
-    def should_use_local_storage(self):
+    def is_disconnected(self):
         if not (self._w_conn and self._r_conn) and self._reconnect_after:
             if datetime.datetime.utcnow() < self._reconnect_after:
                 return True
@@ -162,19 +166,26 @@ class RegionCache(object):
         The master connection to redis.
         """
         if not self._w_conn:
+            _logger.debug("Attempting connection to redis on %s", self._host)
+
             self._reconnect_after = None
             kwargs = dict(**self._kwargs)
             if self._op_timeout:
                 kwargs['socket_timeout'] = self._op_timeout
 
-            self._w_conn = redis.StrictRedis(
-                host=self._host,
-                port=self._port,
-                db=self._db,
-                password=self._password,
-                *self._args,
-                **kwargs
-            )
+            try:
+                self._w_conn = redis.StrictRedis(
+                    host=self._host,
+                    port=self._port,
+                    db=self._db,
+                    password=self._password,
+                    *self._args,
+                    **kwargs
+                )
+            except Exception:
+                _logger.exception("Failed to (re)connect to redis on %s.", self._host)
+                self.invalidate_connections()
+
         return self._w_conn
 
     @property
@@ -185,15 +196,21 @@ class RegionCache(object):
         if not self._r_conn:
             self._reconnect_after = None
             if self._rr_host:
-                self._r_conn = redis.StrictRedis(
-                   host=self._rr_host,
-                   port=self._rr_port,
-                   db=self._db,
-                   password=self._rr_password,
-                   *self._args,
-                   **self._kwargs
-                )
-                return self._r_conn
+                _logger.debug('Attempting to connect to read replica redis on %s', self._rr_host)
+
+                try:
+                    self._r_conn = redis.StrictRedis(
+                       host=self._rr_host,
+                       port=self._rr_port,
+                       db=self._db,
+                       password=self._rr_password,
+                       *self._args,
+                       **self._kwargs
+                    )
+                    return self._r_conn
+                except Exception:
+                    _logger.exception("Failed to (re)connect to redis on %s", self._rr_host)
+                    self.invalidate_connections()
             else:
                 return self.conn
         else:
@@ -227,6 +244,7 @@ class RegionCache(object):
             parts.append(names.pop())
             fqname = '.'.join(parts)
             if fqname not in self._regions:
+                _logger.info("Initializing region %s", fqname)
                 self._regions[fqname] = Region(
                     self, fqname,
                     timeout=timeout,
@@ -242,6 +260,7 @@ class RegionCache(object):
 
         :return: None
         """
+        _logger.info("Clearing entire cache")
         self.region().invalidate()  # invalidate the root cache region will cascade down.
 
 
