@@ -288,3 +288,47 @@ def test_timeout(region_with_timeout):
 
     assert 'key1' in region_with_timeout
     assert 'key2' in region_with_timeout
+
+    subregion = region_with_timeout.region("subregion")
+
+    subregion['key1'] = 0
+    subregion['key2'] = 1
+
+    assert subregion._region_cache.conn.hget(subregion.name, 'key1') is not None
+    assert subregion._region_cache.conn.hget(subregion.name, 'key2') is not None
+
+    assert subregion._region_cache.conn.ttl(subregion.name) > 0
+
+    assert 'key1' in subregion
+    assert 'key2' in subregion
+
+    import time
+    time.sleep(1)
+
+    assert subregion._region_cache.conn.ttl(subregion.name) > 0
+
+    assert subregion._region_cache.conn.hget(subregion.name, 'key1') is not None
+    assert subregion._region_cache.conn.hget(subregion.name, 'key2') is not None
+
+    assert 'key1' in subregion
+    assert 'key2' in subregion
+
+    time.sleep(1.5)
+
+    assert subregion._region_cache.conn.ttl(subregion.name) == -2
+
+    assert 'key1' not in subregion
+    assert 'key2' not in subregion
+
+    # make sure we can recreate the region.
+
+    subregion['key1'] = 0
+    subregion['key2'] = 1
+
+    assert subregion._region_cache.conn.hget(subregion.name, 'key1') is not None
+    assert subregion._region_cache.conn.hget(subregion.name, 'key2') is not None
+
+    assert subregion._region_cache.conn.ttl(subregion.name) > 0
+
+    assert 'key1' in subregion
+    assert 'key2' in subregion
