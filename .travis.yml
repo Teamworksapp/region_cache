@@ -2,7 +2,7 @@
 
 language: python
 python:
-  - 3.6
+  - 3.10
 services:
   - redis-server
 
@@ -25,4 +25,4 @@ deploy:
   on:
     tags: true
     repo: jheard-tw/region_cache
-    python: 3.6
+    python: 3.10

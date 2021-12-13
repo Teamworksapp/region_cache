@@ -1,6 +1,6 @@
 import pickle
 import redis
-from collections import MutableMapping
+from collections.abc import MutableMapping
 from datetime import datetime
 from functools import wraps
 
