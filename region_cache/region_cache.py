@@ -244,7 +244,7 @@ class RegionCache(object):
             parts.append(names.pop())
             fqname = '.'.join(parts)
             if fqname not in self._regions:
-                _logger.info("Initializing region %s", fqname)
+                _logger.debug("Initializing region %s", fqname)
                 self._regions[fqname] = Region(
                     self, fqname,
                     timeout=timeout,
